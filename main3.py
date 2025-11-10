@@ -28,7 +28,9 @@ FORWARD_SPEED    = 160
 TURN_SPEED       = 120     
 WALL_TARGET_MM   = 200.0   
 WALL_P           = 1.1    
-DIST_CHECK_MS    = 60     
+DIST_CHECK_MS    = 60   
+
+BACKUP_DISTANCE_MM = 200.0
 
 HIT_DETECT_DIST_MM = 300.0 
 HIT_RETURN_THRESH_MM = 80.0 
@@ -48,6 +50,33 @@ def stop_motors():
 def tank_run(l_spd, r_spd):
     left_motor.run(int(l_spd))
     right_motor.run(int(r_spd))
+    
+def move_straight_distance(distance_mm, speed=FORWARD_SPEED):
+    """
+    Move straight for a specific distance in mm.
+    Positive distance = forward, negative = backward.
+    """
+    # Calculate wheel rotation needed
+    wheel_circumference = math.pi * WHEEL_DIAM_MM
+    degrees_needed = (distance_mm / wheel_circumference) * 360.0
+    
+    # Reset motor angles
+    left_motor.reset_angle(0)
+    right_motor.reset_angle(0)
+    
+    # Set direction
+    if distance_mm > 0:
+        tank_run(speed, speed)
+    else:
+        tank_run(-speed, -speed)
+        degrees_needed = abs(degrees_needed)
+    
+    # Move until distance covered
+    while abs(left_motor.angle()) < degrees_needed and abs(right_motor.angle()) < degrees_needed:
+        update_odometry()
+        wait(20)
+    
+    stop_motors()
 
 def scan_with_ultrasonic(num_readings=3, sweep_angle=60):
     """
@@ -59,17 +88,17 @@ def scan_with_ultrasonic(num_readings=3, sweep_angle=60):
     
     # Sweep from -sweep_angle/2 to +sweep_angle/2
     us_motor.run_target(200, start_angle - sweep_angle//2, Stop.HOLD, False)
-    wait(50)
+    wait(100)
     
     for i in range(num_readings):
         readings.append(us.distance())
         if i < num_readings - 1:
             us_motor.run_target(200, start_angle - sweep_angle//2 + (i+1)*(sweep_angle//(num_readings-1)), Stop.HOLD, False)
-            wait(50)
+            wait(100)
     
     # Return to center
     us_motor.run_target(200, start_angle, Stop.HOLD, True)
-    wait(50)
+    wait(100)
     
     # Return minimum distance (closest wall point)
     return min(readings) if readings else us.distance()
@@ -101,15 +130,31 @@ def update_odometry():
     pose_x += ds * math.cos(pose_theta)
     pose_y += ds * math.sin(pose_theta)
 
+# def turn_in_place_right(deg=90):
+#     # deg: degrees to turn right (positive)
+#     start = gyro.angle()
+#     target = start - deg
+#     tank_run(TURN_SPEED, -TURN_SPEED)
+#     while gyro.angle() > target:
+#         update_odometry()
+#         wait(10)
+#     stop_motors()
 def turn_in_place_right(deg=90):
     # deg: degrees to turn right (positive)
     start = gyro.angle()
     target = start - deg
+    ev3.speaker.say("Start: " + str(start))
+    ev3.speaker.say("Target: " + str(target))
     tank_run(TURN_SPEED, -TURN_SPEED)
-    while gyro.angle() > target:
+    
+    safety_counter = 0
+    while gyro.angle() > target and safety_counter < 100:
         update_odometry()
-        wait(20)
+        safety_counter += 1
+        wait(5)
+    
     stop_motors()
+    ev3.speaker.say("Final: " + str(gyro.angle()))
 
 def turn_in_place_left(deg=90):
     if gyro:
@@ -118,7 +163,7 @@ def turn_in_place_left(deg=90):
         tank_run(-TURN_SPEED, TURN_SPEED)
         while gyro.angle() < target:
             update_odometry()
-            wait(20)
+            wait(10)
         stop_motors()
     else:
         wheel_deg = deg * (AXLE_TRACK_MM / WHEEL_DIAM_MM)
@@ -203,7 +248,7 @@ last_pose_y = 0.0
 # Main
 # ----------------------------
 
-while Button.CENTER not in ev3.buttons():
+while Button.CENTER not in ev3.buttons.pressed():
     wait(50)
 
 # Reset gyro to 0 at start
@@ -222,7 +267,7 @@ while True:
     d = us.distance()  # mm
     update_odometry()
 
-    if d <= HIT_DETECT_DIST_MM:
+    if bump.pressed():
         stop_motors()
         ev3.speaker.beep()
         wait(150)
@@ -232,6 +277,7 @@ while True:
     if elapsed > OVERALL_TIMEOUT_MS:
         stop_motors()
 
+move_straight_distance(-BACKUP_DISTANCE_MM, speed=120)
 # record hit pose (x,y,theta) 
 hit_pose = (pose_x, pose_y, pose_theta)
 
